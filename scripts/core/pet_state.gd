@@ -32,6 +32,7 @@ var recent_memories: Array = []   # 最近交互记忆摘要
 var memory_summary := ""          # 长期记忆摘要（后续可由 LLM 蒸馏）
 var growth_log: Array = []        # 成长日志
 var inventory: Dictionary = {}    # 背包：{item_id: 数量}，随机事件中获得 / 丢失
+var unlocked_traits: Array = []   # 已觉醒的性格特质（维度 id），用于只播报一次觉醒
 
 
 func _ready() -> void:
@@ -59,6 +60,7 @@ func reset() -> void:
 	memory_summary = ""
 	growth_log.clear()
 	inventory.clear()
+	unlocked_traits.clear()
 	commit()
 
 
@@ -140,6 +142,7 @@ func _save() -> void:
 		"memory_summary": memory_summary,
 		"growth_log": growth_log,
 		"inventory": inventory,
+		"unlocked_traits": unlocked_traits,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
@@ -173,6 +176,9 @@ func load_state() -> void:
 		var gl = data.get("growth_log", [])
 		if gl is Array:
 			growth_log = gl
+		var tr = data.get("unlocked_traits", [])
+		if tr is Array:
+			unlocked_traits = _str_array(tr)
 		var inv = data.get("inventory", {})
 		if inv is Dictionary:
 			inventory = {}

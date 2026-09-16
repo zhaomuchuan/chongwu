@@ -12,6 +12,49 @@ signal chat_sentiment_applied(kind: String, intensity: float)
 const LOW := 38.0
 const HIGH := 62.0  # 维度高低阈值
 
+# ---- 性格特质：维度达到阈值后觉醒，改变宠物的自主行为（纯本地规则，LLM 不参与）----
+const TRAIT_THRESHOLD := 62.0
+const TRAIT_FULL := 85.0         # 特质强度饱和点
+const TRAITS := {
+	"lively": {"name": "活泼好动", "desc": "撒欢更勤快，跑得也更远"},
+	"affection": {"name": "黏人精", "desc": "更频繁地主动找你说话"},
+	"brave": {"name": "胆大包天", "desc": "不再被黑影和小意外吓到"},
+	"gentle": {"name": "软乎乎", "desc": "被摸头时会幸福地蹭你"},
+	"curious": {"name": "好奇宝宝", "desc": "更容易发现新奇的东西"},
+}
+
+
+func has_trait(dim: String) -> bool:
+	return float(PetState.personality.get(dim, 50.0)) >= TRAIT_THRESHOLD
+
+
+# 特质强度 0~1：50 为 0、85 饱和。给频率/距离/概率类行为做连续调节
+func trait_strength(dim: String) -> float:
+	return clampf((float(PetState.personality.get(dim, 50.0)) - 50.0) / (TRAIT_FULL - 50.0), 0.0, 1.0)
+
+
+func active_traits() -> Array:
+	var out: Array = []
+	for dim in PetState.DIMENSIONS:
+		if has_trait(dim):
+			out.append(dim)
+	return out
+
+
+# 首次跨过阈值的维度写入成长日志（每个特质只播报一次，状态持久化）
+func check_trait_unlocks() -> void:
+	for dim in PetState.DIMENSIONS:
+		if has_trait(dim) and not PetState.unlocked_traits.has(dim):
+			PetState.unlocked_traits.append(dim)
+			var t: Dictionary = TRAITS[dim]
+			PetState.add_log("✦ 性格觉醒【%s】 · %s" % [str(t["name"]), str(t["desc"])])
+
+
+func _ready() -> void:
+	# 旧存档可能早已越过阈值：启动时补一次觉醒判定
+	check_trait_unlocks()
+	PetState.commit()
+
 
 var last_interaction_msec := 0   # 最近一次交互时间，供调度器判断是否被冷落
 
@@ -71,6 +114,7 @@ func apply_interaction(kind: String) -> void:
 	last_interaction_msec = Time.get_ticks_msec()
 	PetState.add_memory(memory)
 	PetState.add_log(log)
+	check_trait_unlocks()
 	PetState.commit()
 	interaction_applied.emit(kind)
 
@@ -132,6 +176,7 @@ func apply_chat_sentiment(kind: String, intensity: float = 0.5) -> void:
 	_sleeping = false
 	PetState.add_memory(memory)
 	PetState.add_log(log)
+	check_trait_unlocks()
 	PetState.commit()
 	chat_sentiment_applied.emit(kind, intensity)
 
@@ -212,6 +257,7 @@ func use_item(item_id: String) -> Dictionary:
 	var item_name: String = PetEventDeck.ITEM_NAMES.get(item_id, item_id)
 	PetState.add_memory("主人把【%s】拿给我玩，我开心地用了好久。" % item_name)
 	PetState.add_log("使用道具【%s】 · %s" % [item_name, " ".join(parts)])
+	check_trait_unlocks()
 	PetState.commit()
 	return {"ok": true, "name": item_name, "speech": str(def.get("speech", "")), "reaction": str(def.get("reaction", "positive"))}
 

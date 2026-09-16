@@ -144,13 +144,20 @@ const EVENTS := [
 
 # 抽一个当前可触发的事件（加权）；丢道具事件需要背包里有东西
 func pick(state) -> Dictionary:
+	# 好奇特质：discover 类事件权重随好奇强度提高（50 点为基准，最高 ×1.8）
+	var curious_s: float = clampf((float(state.personality.get("curious", 50.0)) - 50.0) / 35.0, 0.0, 1.0)
 	var pool: Array = []
 	var total := 0.0
 	for e in EVENTS:
 		if e.get("dynamic", "") == "lose_item" and state.inventory.is_empty():
 			continue
 		var w: float = e.get("weight", 1.0)
-		pool.append(e)
+		if str(e.get("kind", "")) == "discover":
+			w *= 1.0 + 0.8 * curious_s
+		# 调整后的权重写回副本，抽样循环才能用上（不能只改 total）
+		var copy: Dictionary = e.duplicate(true)
+		copy["weight"] = w
+		pool.append(copy)
 		total += w
 	if pool.is_empty():
 		return {}
@@ -168,6 +175,13 @@ func roll_and_apply(state) -> Dictionary:
 	var e := pick(state)
 	if e.is_empty():
 		return {}
+
+	# 勇敢特质：黑影惊吓事件翻转为「勇敢面对」，不再掉心情/勇敢
+	if str(e.get("id", "")) == "scared_shadow" and float(state.personality.get("brave", 50.0)) >= PetBrainEngine.TRAIT_THRESHOLD:
+		e["title"] = "才不怕呢"
+		e["speech"] = "那个黑影？哼，我凑过去瞪了它一眼——嘿嘿，不过是我自己的影子嘛！"
+		e["memory"] = "我勇敢地凑近吓了我一跳的黑影，发现只是影子，觉得自己长大了一点。"
+		e["effects"] = {"mood": 3.0, "persona": {"brave": 0.6}}
 
 	var fx: Dictionary = e.get("effects", {})
 	if fx.has("mood"):

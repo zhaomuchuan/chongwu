@@ -16,11 +16,21 @@ func _ready() -> void:
 
 
 func _draw() -> void:
-	var center := size * 0.5
-	var r := minf(size.x, size.y) * 0.5 - 34.0
+	# 顶部留 18px 给性格特质行，雷达整体下移
+	var center := size * 0.5 + Vector2(0, 9)
+	var r := minf(size.x, size.y) * 0.5 - 40.0
 	var dims := PetState.DIMENSIONS
 	var labels := PetState.DIMENSION_LABELS
 	var n := dims.size()
+	var pink := Color(1.0, 0.165, 0.43)
+
+	# 已觉醒的性格特质（活泼好动 / 黏人精 …）
+	var trait_names: Array = []
+	for dim in PetBrain.active_traits():
+		trait_names.append(PetBrainEngine.TRAITS[dim]["name"])
+	if not trait_names.is_empty():
+		draw_string(ThemeDB.fallback_font, Vector2(12, 15), "◆ " + " · ".join(trait_names),
+			HORIZONTAL_ALIGNMENT_LEFT, size.x - 24.0, 12, pink)
 
 	# 底板
 	draw_rect(Rect2(Vector2.ZERO, size), Color(0.035, 0.028, 0.075, 0.72), true)
@@ -48,14 +58,17 @@ func _draw() -> void:
 	draw_polyline(data, Color(line_color, 0.35), 6.0, true)   # 辉光层
 	draw_polyline(data, line_color, 2.0, true)
 	for i in n:
-		draw_circle(data[i], 3.0, node_color)
+		# 已觉醒特质的维度节点放大、染成品红
+		var dim_color: Color = pink if float(PetState.personality.get(dims[i], 50.0)) >= PetBrainEngine.TRAIT_THRESHOLD else node_color
+		draw_circle(data[i], 4.5 if dim_color == pink else 3.0, dim_color)
 
 	# 标签
 	var font := ThemeDB.fallback_font
 	for i in n:
 		var v: float = PetState.personality.get(dims[i], 50.0)
 		var p := center + Vector2.from_angle(_angle(i, n)) * (r + 16.0)
-		draw_string(font, p - Vector2(16, 4), "%s %d" % [labels[dims[i]], int(v)], HORIZONTAL_ALIGNMENT_CENTER, 32, 12, text_color)
+		var label_color: Color = pink if v >= PetBrainEngine.TRAIT_THRESHOLD else text_color
+		draw_string(font, p - Vector2(16, 4), "%s %d" % [labels[dims[i]], int(v)], HORIZONTAL_ALIGNMENT_CENTER, 32, 12, label_color)
 
 
 func _angle(i: int, n: int) -> float:

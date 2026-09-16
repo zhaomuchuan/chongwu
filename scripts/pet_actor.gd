@@ -57,6 +57,9 @@ var _roaming := false
 var _roam_start := 0.0
 var _roam_depth := 0.0          # 当前沿相机轴向的深度（负=跑近，正=跑远）
 var _roam_prev_depth := 0.0
+var _roam_far := ROAM_FAR       # 本轮撒欢最远点（活泼特质会拉远）
+var _nuzzle_start := -1.0       # 温顺特质：被摸头蹭蹭的时间窗
+var _nuzzle_until := -1.0
 var _pivot_home := Vector3.ZERO
 var _cam_base_size := 2.0
 var _view_scale := 1.0         # 当前透视缩放（近>1 远<1），2D 光环跟随
@@ -193,7 +196,10 @@ func play_interaction(kind: String) -> void:
 	_end_roam()
 	match kind:
 		"pet":
-			_react("gesture-positive", 2.1, 1.0)       # 眯眼享受
+			if PetBrain.has_trait("gentle"):
+				_react_nuzzle()                         # 软乎乎：凑上来幸福地蹭你
+			else:
+				_react("gesture-positive", 2.1, 1.0)    # 眯眼享受
 		"feed":
 			_react("eat", 2.8, 1.0)                     # 低头吃东西
 		"comfort":
@@ -319,6 +325,25 @@ func _react_look_around(duration: float) -> void:
 	_go_idle()
 
 
+# 温顺特质解锁：被摸头时凑上前幸福地蹭两下（gesture-positive + 程序化前蹭）
+func _react_nuzzle() -> void:
+	_end_roam()
+	_token += 1
+	var my_token := _token
+	_reacting = true
+	_look_until = -1.0
+	_player.speed_scale = 1.0
+	_player.play("gesture-positive", 0.15)
+	_nuzzle_start = _t
+	_nuzzle_until = _t + 2.6
+	await get_tree().create_timer(2.6).timeout
+	if my_token != _token:
+		return
+	_nuzzle_start = -1.0
+	_nuzzle_until = -1.0
+	_go_idle()
+
+
 func _start_idle() -> void:
 	if _player == null:
 		return
@@ -346,7 +371,9 @@ func _roam_loop() -> void:
 		await get_tree().create_timer(5.0).timeout
 		if _reacting or _roaming:
 			continue
-		if _t - _last_interact_t < ROAM_DELAY:
+		# 活泼特质（活泼好动）：空闲等待从 30s 缩短到最低 14s
+		var delay: float = lerpf(ROAM_DELAY, 14.0, PetBrain.trait_strength("lively"))
+		if _t - _last_interact_t < delay:
 			continue
 		var my_id := _begin_roam()
 		await get_tree().create_timer(ROAM_DURATION).timeout
@@ -360,6 +387,8 @@ func _begin_roam() -> int:
 	_roam_start = _t
 	_roam_depth = 0.0
 	_roam_prev_depth = 0.0
+	# 活泼特质：最远点从 2.6 拉到 3.5，跑得更远、缩得更小
+	_roam_far = lerpf(ROAM_FAR, 3.5, PetBrain.trait_strength("lively"))
 	_look_until = -1.0
 	_player.speed_scale = 1.15
 	_player.play("run", 0.3)
@@ -412,6 +441,10 @@ func _process(delta: float) -> void:
 	if not _reacting and not _roaming and _expression in HAPPY_EXPR:
 		bob += absf(sin(_t * 3.6)) * 0.05
 	var pos := _pivot_home + Vector3.UP * bob
+	if _t < _nuzzle_until and _nuzzle_start >= 0.0:
+		# 温顺特质的蹭蹭：沿相机轴向主人凑两下
+		var nk: float = absf(sin((_t - _nuzzle_start) * 6.0))
+		pos += _cam_rig.transform.basis.z * (-0.28) * nk
 
 	# 困了一点点头；开心微微仰起
 	var pitch := 0.0
@@ -423,6 +456,8 @@ func _process(delta: float) -> void:
 				pitch = -0.10
 			"excited":
 				pitch = 0.05
+	if _t < _nuzzle_until and _nuzzle_start >= 0.0:
+		pitch = -0.12 * absf(sin((_t - _nuzzle_start) * 6.0))
 
 	if _roaming:
 		# 深度曲线：sin 包络淡入淡出，里面在「近 ↔ 远」间往复 1.5 趟
@@ -430,13 +465,13 @@ func _process(delta: float) -> void:
 		var envelope := sin(p * PI)
 		var k := cos(p * TAU * ROAM_TRIPS) * 0.5 + 0.5
 		_roam_prev_depth = _roam_depth
-		_roam_depth = lerpf(ROAM_NEAR, ROAM_FAR, k) * envelope
+		_roam_depth = lerpf(ROAM_NEAR, _roam_far, k) * envelope
 		# 沿当前相机轴向移动：无论视角怎么转，都是朝镜头跑近、朝远处跑远
 		pos += _cam_rig.transform.basis.z * _roam_depth
 		# depth 减小 = 正在跑近 → 正面朝镜头；增大 = 跑远 → 背对镜头
 		yaw = _orbit_yaw + (0.0 if _roam_depth < _roam_prev_depth else PI)
 		# 正交相机没有透视，用取景大小模拟近大远小：近处放大，远处明显缩小
-		var closeness: float = clampf((ROAM_FAR - _roam_depth) / (ROAM_FAR - ROAM_NEAR), 0.0, 1.0)
+		var closeness: float = clampf((_roam_far - _roam_depth) / (_roam_far - ROAM_NEAR), 0.0, 1.0)
 		_cam.size = _cam_base_size * lerpf(2.45, 0.62, closeness)
 	else:
 		_cam.size = lerpf(_cam.size, _cam_base_size, minf(delta * 4.0, 1.0))

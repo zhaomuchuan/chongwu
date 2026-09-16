@@ -72,8 +72,13 @@ func _check_neglect() -> void:
 
 func _proactive_loop() -> void:
 	while true:
-		await get_tree().create_timer(randf_range(PROACTIVE_MIN, PROACTIVE_MAX)).timeout
-		if _proactive_count < MAX_PROACTIVE:
+		# 亲昵特质（黏人精）：主动搭话间隔随亲昵强度缩短，并放宽单次运行次数上限
+		var s: float = PetBrain.trait_strength("affection")
+		var lo: float = lerpf(PROACTIVE_MIN, 80.0, s)
+		var hi: float = lerpf(PROACTIVE_MAX, 170.0, s)
+		var cap: int = MAX_PROACTIVE + (2 if PetBrain.has_trait("affection") else 0)
+		await get_tree().create_timer(randf_range(lo, hi)).timeout
+		if _proactive_count < cap:
 			_proactive_count += 1
 			proactive_chat.emit()
 
@@ -90,6 +95,8 @@ func _special_event_loop() -> void:
 	while true:
 		var event: Dictionary = _deck.roll_and_apply(PetState)
 		if not event.is_empty():
+			PetBrain.check_trait_unlocks()
+			PetState.commit()
 			special_event.emit(event)
 		await get_tree().create_timer(randf_range(SPECIAL_EVENT_MIN, SPECIAL_EVENT_MAX)).timeout
 
