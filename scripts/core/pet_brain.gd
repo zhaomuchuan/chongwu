@@ -128,11 +128,10 @@ func apply_interaction(kind: String) -> bool:
 		"comfort":
 			PetState.add_mood(8.0)
 			PetState.add_trust(1.0)
-			PetState.add_energy(4.0)
 			PetState.add_personality("gentle", 0.6)
 			PetState.add_personality("brave", 0.4)   # 被安抚、获得安全感 → 更勇敢
 			memory = "主人温柔地安抚我，心情平复了。"
-			log = "被安抚 · 温顺+0.6 勇敢+0.4 心情+8 精力+4"
+			log = "被安抚 · 温顺+0.6 勇敢+0.4 心情+8"
 		"play":
 			# 精力不足时玩不动，只有少量心情收益
 			if PetState.energy < 20.0:
