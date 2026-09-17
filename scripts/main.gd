@@ -103,6 +103,8 @@ func _build_ui() -> void:
 	_log_label.add_theme_font_size_override("font_size", 13)
 	_log_label.add_theme_color_override("font_color", Color(0.72, 0.82, 0.90))
 	_log_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# 每条日志常换成两行；裁剪兜底，防止长文案溢出盖住背包区
+	_log_label.clip_contents = true
 	_place(_log_label, 940, 184, 320, 196)
 	overlay.add_child(_log_label)
 	_refresh_log()
@@ -420,7 +422,7 @@ func _refresh_log() -> void:
 		return
 	var lines: Array = []
 	var entries: Array = PetState.growth_log
-	var start := maxi(0, entries.size() - 6)
+	var start := maxi(0, entries.size() - 4)
 	for i in range(start, entries.size()):
 		var e: Dictionary = entries[i]
 		lines.append("[%s] %s" % [str(e.get("time", "")).right(5), str(e.get("event", ""))])
