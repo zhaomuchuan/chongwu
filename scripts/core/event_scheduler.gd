@@ -57,8 +57,17 @@ func _decay_loop() -> void:
 			local_event.emit("%s睡醒了，又变得精力充沛！" % PetState.pet_name)
 		elif sleep_status != "sleeping" and PetState.energy >= PetBrain.SLEEP_WAKE:
 			_was_sleeping = false
+		_regen_feed()
 		_check_needs()
 		_check_neglect()
+
+
+# 口粮按真实时间恢复（每 20 分钟 1 份、上限 10 份）；恢复整份时存档并轻提示
+func _regen_feed() -> void:
+	var gained: int = PetBrain.regen_feed_charges()
+	if gained > 0:
+		PetState.commit()
+		local_event.emit("%s的干粮配送到了 ×%d（剩余 %d 份）" % [PetState.pet_name, gained, PetBrain.feed_charges_left()])
 
 
 # 长时间无交互：活泼/亲昵下降，并提醒主人（不调用 LLM，不耗 token）

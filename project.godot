@@ -17,11 +17,11 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 PetState="*res://scripts/core/pet_state.gd"
 PetBrain="*res://scripts/core/pet_brain.gd"
 LLM="*res://scripts/core/llm_client.gd"
 Scheduler="*res://scripts/core/event_scheduler.gd"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
 [display]
 

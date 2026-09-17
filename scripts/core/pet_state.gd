@@ -27,12 +27,16 @@ var mood := 50.0        # 心情 0~100
 var trust := 20.0       # 信任 0~100
 var hunger := 80.0      # 饱食 0~100
 var energy := 80.0      # 精力 0~100
+var feed_charges := 10.0     # 剩余口粮份数（浮点用于随时间累积），上限/恢复节奏在 PetBrain
+var feed_tick_unix := 0.0    # 上次结算口粮恢复的真实时间戳（秒），0 = 尚未初始化
 
 var recent_memories: Array = []   # 最近交互记忆摘要
 var memory_summary := ""          # 长期记忆摘要（后续可由 LLM 蒸馏）
 var growth_log: Array = []        # 成长日志
 var inventory: Dictionary = {}    # 背包：{item_id: 数量}，随机事件中获得 / 丢失
 var unlocked_traits: Array = []   # 已觉醒的性格特质（维度 id），用于只播报一次觉醒
+var fish_dex: Array = []          # 数据海已收录的鱼 id
+var fishing_tick_unix := 0.0      # 上次钓鱼结算的真实时间戳（秒），用于离线鱼汛
 
 
 func _ready() -> void:
@@ -56,11 +60,15 @@ func reset() -> void:
 	trust = 20.0
 	hunger = 80.0
 	energy = 80.0
+	feed_charges = 10.0
+	feed_tick_unix = 0.0
 	recent_memories.clear()
 	memory_summary = ""
 	growth_log.clear()
 	inventory.clear()
 	unlocked_traits.clear()
+	fish_dex.clear()
+	fishing_tick_unix = 0.0
 	commit()
 
 
@@ -138,11 +146,15 @@ func _save() -> void:
 		"trust": trust,
 		"hunger": hunger,
 		"energy": energy,
+		"feed_charges": feed_charges,
+		"feed_tick_unix": feed_tick_unix,
 		"recent_memories": recent_memories,
 		"memory_summary": memory_summary,
 		"growth_log": growth_log,
 		"inventory": inventory,
 		"unlocked_traits": unlocked_traits,
+		"fish_dex": fish_dex,
+		"fishing_tick_unix": fishing_tick_unix,
 	}
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
@@ -169,6 +181,9 @@ func load_state() -> void:
 		trust = float(data.get("trust", trust))
 		hunger = float(data.get("hunger", hunger))
 		energy = float(data.get("energy", energy))
+		# 旧存档没有口粮字段：缺省视为满份（10 份）
+		feed_charges = clampf(float(data.get("feed_charges", 10.0)), 0.0, 100.0)
+		feed_tick_unix = float(data.get("feed_tick_unix", 0.0))
 		var mem = data.get("recent_memories", [])
 		if mem is Array:
 			recent_memories = _str_array(mem)
@@ -179,6 +194,10 @@ func load_state() -> void:
 		var tr = data.get("unlocked_traits", [])
 		if tr is Array:
 			unlocked_traits = _str_array(tr)
+		var fd = data.get("fish_dex", [])
+		if fd is Array:
+			fish_dex = _str_array(fd)
+		fishing_tick_unix = float(data.get("fishing_tick_unix", 0.0))
 		var inv = data.get("inventory", {})
 		if inv is Dictionary:
 			inventory = {}

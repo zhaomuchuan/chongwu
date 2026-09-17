@@ -11,8 +11,12 @@ const RADAR := "res://scripts/ui/radar_chart.gd"
 const STATUS := "res://scripts/ui/status_panel.gd"
 const DIALOGUE := "res://scripts/ui/dialogue_box.gd"
 const SETTINGS := "res://scripts/ui/settings_dialog.gd"
+const ADVENTURE_MENU := "res://scripts/ui/adventure_menu.gd"
 const CYBER_BG := "res://scripts/ui/cyber_background.gd"
 const CLOCK := "res://scripts/ui/clock_panel.gd"
+const EXPLORE := "res://scripts/world/explore_world.gd"
+const PLATFORMER := "res://scripts/world/platformer_world.gd"
+const FISHING := "res://scripts/world/fishing_world.gd"
 
 # 赛博朋克配色
 const INK_BG := Color(0.043, 0.031, 0.086)          # 深紫黑
@@ -25,10 +29,16 @@ var _radar: Control
 var _status: Control
 var _dialogue: Control
 var _settings: Window
+var _adventure_menu: Window
 var _hint: Label
 var _log_label: Label
 var _inventory_box: HFlowContainer
 var _inventory_empty: Label
+var _ui_layer: CanvasLayer
+var _explore: Control
+var _platformer: Control
+var _fishing: Control
+var _feed_btn: Button
 var _busy := false
 var _pending_user_text := ""   # 等待回复的用户原话（主动搭话时为空，不参与情感结算）
 
@@ -61,14 +71,14 @@ func _build_ui() -> void:
 	bg_layer.add_child(cyber)
 
 	# UI 层
-	var ui_layer := CanvasLayer.new()
-	ui_layer.layer = 1
-	add_child(ui_layer)
+	_ui_layer = CanvasLayer.new()
+	_ui_layer.layer = 1
+	add_child(_ui_layer)
 	var overlay := Control.new()
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	# 空白区域放行鼠标事件，否则这个全屏容器会把下层宠物的点击/拖拽全部吞掉
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui_layer.add_child(overlay)
+	_ui_layer.add_child(overlay)
 
 	# 左上：日期 / 时间 / 天气
 	var clock: Control = load(CLOCK).new()
@@ -81,7 +91,7 @@ func _build_ui() -> void:
 	overlay.add_child(_status)
 
 	_radar = load(RADAR).new()
-	_place(_radar, 560, 150, 340, 340)
+	_place(_radar, 560, 158, 340, 340)
 	overlay.add_child(_radar)
 
 	# 成长记录
@@ -120,15 +130,18 @@ func _build_ui() -> void:
 	btn_box.add_theme_constant_override("separation", 10)
 	_place(btn_box, 560, 520, 700, 44)
 	overlay.add_child(btn_box)
-	var pets := [["摸头", "_on_pet"], ["喂食", "_on_feed"], ["安抚", "_on_comfort"], ["聊天", "_on_chat"], ["玩耍", "_on_play"], ["设置", "_on_settings"]]
+	var pets := [["摸头", "_on_pet"], ["喂食", "_on_feed"], ["安抚", "_on_comfort"], ["聊天", "_on_chat"], ["玩耍", "_on_play"], ["冒险", "_on_adventure_menu"], ["设置", "_on_settings"]]
 	for p in pets:
 		var b := Button.new()
 		b.text = p[0]
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.focus_mode = Control.FOCUS_NONE
-		_style_button(b, p[0] == "设置")
+		_style_button(b, p[0] == "设置" or p[0] == "冒险")
 		b.pressed.connect(Callable(self, p[1]))
 		btn_box.add_child(b)
+		if p[1] == "_on_feed":
+			_feed_btn = b
+	_refresh_feed_button()
 
 	# 提示行
 	_hint = Label.new()
@@ -146,7 +159,15 @@ func _build_ui() -> void:
 	# 设置弹窗（挂在窗口层，默认隐藏，点「设置」才弹出）
 	_settings = load(SETTINGS).new()
 	_settings.hide()
-	ui_layer.add_child(_settings)
+	_ui_layer.add_child(_settings)
+
+	# 冒险选择窗（探索 / 闯关 / 垂钓 三选一）
+	_adventure_menu = load(ADVENTURE_MENU).new()
+	_adventure_menu.hide()
+	_adventure_menu.explore_chosen.connect(_on_explore)
+	_adventure_menu.platformer_chosen.connect(_on_adventure)
+	_adventure_menu.fishing_chosen.connect(_on_fishing)
+	_ui_layer.add_child(_adventure_menu)
 
 
 # 以 1280×720 为设计基准；按屏幕可用区域（换算系统 DPI 缩放）等比缩小，配合 aspect=keep 保证不裁切
@@ -300,6 +321,17 @@ func _on_log_added(_entry: Dictionary) -> void:
 
 func _on_state_changed() -> void:
 	_refresh_inventory()
+	_refresh_feed_button()
+
+
+# 喂食按钮显示剩余口粮份数；耗尽时变成「备货中」
+func _refresh_feed_button() -> void:
+	if _feed_btn == null:
+		return
+	var left: int = PetBrain.feed_charges_left()
+	var txt := "喂食 ×%d" % left if left > 0 else "喂食 · 备货中"
+	if _feed_btn.text != txt:
+		_feed_btn.text = txt
 
 
 func _refresh_inventory() -> void:
@@ -410,7 +442,12 @@ func _on_comfort() -> void:
 func _interact(kind: String) -> void:
 	if _busy:
 		return
-	PetBrain.apply_interaction(kind)
+	if not PetBrain.apply_interaction(kind):
+		# 目前只有口粮耗尽的喂食会被拒
+		var mins: int = maxi(1, ceili(PetBrain.feed_seconds_to_next() / 60.0))
+		_dialogue.append_system("干粮吃完了，下一份还在路上，大约 %d 分钟后配送到货……" % mins)
+		_pet.show_bubble("碗空了……干粮还要 %d 分钟才到，我先忍忍。" % mins)
+		return
 	var line := LLM.offline_reply("")
 	_dialogue.append_pet(line)
 	_pet.show_bubble(line)
@@ -422,6 +459,91 @@ func _on_chat() -> void:
 
 func _on_play() -> void:
 	_interact("play")
+
+
+# 点「冒险」：弹出探索 / 闯关二选一窗口
+func _on_adventure_menu() -> void:
+	if _busy or _explore != null or _platformer != null or _fishing != null:
+		return
+	_adventure_menu.open_menu()
+
+
+# 进入俯视角探索世界（精力不足被 PetBrain 拒绝）
+func _on_explore() -> void:
+	if _busy or _explore != null or _platformer != null or _fishing != null:
+		return
+	if not PetBrain.begin_exploration():
+		_dialogue.append_system("%s太累了，先喂点吃的或睡一觉，再出门探险吧……" % PetState.pet_name)
+		_pet.show_bubble("我现在没力气出门探险……让我歇会儿嘛。")
+		return
+	_dialogue.append_system("%s一溜烟钻进了数据废墟深处。" % PetState.pet_name)
+	_explore = load(EXPLORE).new()
+	_ui_layer.add_child(_explore)
+	_explore.finished.connect(_on_explore_done)
+
+
+# 探险归来：PetBrain 确定性结算 → 对话区播报 + 宠物表演
+func _on_explore_done(summary: Dictionary) -> void:
+	var result: Dictionary = PetBrain.settle_expedition(summary)
+	if _explore != null:
+		_explore.queue_free()
+		_explore = null
+	_dialogue.append_system(str(result.get("line", "")))
+	_dialogue.append_pet(str(result.get("speech", "")))
+	_pet.show_bubble(str(result.get("speech", "")))
+	_pet.play_reaction(str(result.get("reaction", "positive")))
+
+
+# 进入横版霓虹天台跑酷（精力不足被 PetBrain 拒绝）
+func _on_adventure() -> void:
+	if _busy or _explore != null or _platformer != null or _fishing != null:
+		return
+	if not PetBrain.begin_adventure():
+		_dialogue.append_system("%s太累了，先喂点吃的或睡一觉，再去天台跑酷吧……" % PetState.pet_name)
+		_pet.show_bubble("我现在没力气蹦跶……让我歇会儿嘛。")
+		return
+	_dialogue.append_system("%s一溜烟跳上了霓虹天台。" % PetState.pet_name)
+	_platformer = load(PLATFORMER).new()
+	_ui_layer.add_child(_platformer)
+	_platformer.finished.connect(_on_adventure_done)
+
+
+# 跑酷归来：PetBrain 确定性结算 → 对话区播报 + 宠物表演
+func _on_adventure_done(summary: Dictionary) -> void:
+	var result: Dictionary = PetBrain.settle_platformer(summary)
+	if _platformer != null:
+		_platformer.queue_free()
+		_platformer = null
+	_dialogue.append_system(str(result.get("line", "")))
+	_dialogue.append_pet(str(result.get("speech", "")))
+	_pet.show_bubble(str(result.get("speech", "")))
+	_pet.play_reaction(str(result.get("reaction", "positive")))
+
+
+# 进入数据海垂钓（精力不足被 PetBrain 拒绝）
+func _on_fishing() -> void:
+	if _busy or _explore != null or _platformer != null or _fishing != null:
+		return
+	if not PetBrain.begin_fishing():
+		_dialogue.append_system("%s太累了，先喂点吃的或睡一觉，再去海边钓鱼吧……" % PetState.pet_name)
+		_pet.show_bubble("我现在扛不动鱼竿……让我歇会儿嘛。")
+		return
+	_dialogue.append_system("%s扛着小鱼竿，溜去了数据海边上。" % PetState.pet_name)
+	_fishing = load(FISHING).new()
+	_ui_layer.add_child(_fishing)
+	_fishing.finished.connect(_on_fishing_done)
+
+
+# 钓鱼归来：PetBrain 确定性结算 → 对话区播报 + 宠物表演
+func _on_fishing_done(summary: Dictionary) -> void:
+	var result: Dictionary = PetBrain.settle_fishing(summary)
+	if _fishing != null:
+		_fishing.queue_free()
+		_fishing = null
+	_dialogue.append_system(str(result.get("line", "")))
+	_dialogue.append_pet(str(result.get("speech", "")))
+	_pet.show_bubble(str(result.get("speech", "")))
+	_pet.play_reaction(str(result.get("reaction", "positive")))
 
 
 func _on_settings() -> void:

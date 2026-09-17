@@ -35,6 +35,12 @@ func _draw() -> void:
 	if PetBrain.is_sleeping():
 		state += " · 睡眠中 zZ"
 	draw_string(font, Vector2(12, 26), "%s // %s" % [PetState.pet_name, state], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, NEON_PINK)
+	# 口粮存量（喂食次数，按时间恢复）；0 份时粉色提醒
+	var feed_left: int = PetBrain.feed_charges_left()
+	var feed_col := NEON_GREEN if feed_left > 0 else NEON_PINK
+	var feed_txt := "◆口粮 %d/%d" % [feed_left, int(PetBrain.MAX_FEED_CHARGES)]
+	var feed_w: float = font.get_string_size(feed_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	draw_string(font, Vector2(size.x - feed_w - 12, 25), feed_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, feed_col)
 
 	var y := 38.0
 	_draw_bar(font, y, "心情", PetState.mood, NEON_PINK)

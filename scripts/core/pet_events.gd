@@ -16,6 +16,20 @@ const ITEM_NAMES := {
 	"key": "铜旧钥匙",
 }
 
+# 数据海鱼图鉴：rarity 1 常见 / 2 少见 / 3 稀有
+const FISH_DEX := {
+	"plankton": {"name": "荧光浮游体", "rarity": 1},
+	"koi": {"name": "缓存锦鲤", "rarity": 1},
+	"puffer": {"name": "报错河豚", "rarity": 1},
+	"jelly": {"name": "霓虹水母", "rarity": 2},
+	"goldfish": {"name": "数据包金鱼", "rarity": 2},
+	"shark": {"name": "量子鲨", "rarity": 3},
+	"nullfish": {"name": "NULL空鱼", "rarity": 3},
+	"beacon": {"name": "深渊信标", "rarity": 3},
+}
+const FISH_RARITY_LABELS := {1: "常见", 2: "少见", 3: "稀有"}
+const FISH_TOTAL := 8
+
 # kind: discover 发现 / joy 开心事 / mishap 小倒霉
 # effects: mood 心情, trust 信任, persona 五维, item {id, delta}
 # weight 越大越常见；dynamic=lose_item 的事件在抽取时随机指定一件已拥有的道具

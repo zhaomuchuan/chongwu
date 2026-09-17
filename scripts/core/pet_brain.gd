@@ -12,6 +12,11 @@ signal chat_sentiment_applied(kind: String, intensity: float)
 const LOW := 38.0
 const HIGH := 62.0  # 维度高低阈值
 
+# ---- 口粮：喂食次数有限，按真实时间慢慢恢复（离线也恢复），用完只能等 ----
+const MAX_FEED_CHARGES := 10.0   # 最多囤 10 份口粮
+const FEED_REGEN_SEC := 1200.0   # 每 20 分钟恢复 1 份
+const FEED_HUNGER_GAIN := 35.0   # 每份口粮回的饱食度（不再一口喂满）
+
 # ---- 性格特质：维度达到阈值后觉醒，改变宠物的自主行为（纯本地规则，LLM 不参与）----
 const TRAIT_THRESHOLD := 62.0
 const TRAIT_FULL := 85.0         # 特质强度饱和点
@@ -53,14 +58,53 @@ func check_trait_unlocks() -> void:
 func _ready() -> void:
 	# 旧存档可能早已越过阈值：启动时补一次觉醒判定
 	check_trait_unlocks()
+	regen_feed_charges(true)   # 离线期间也按真实时间补发口粮
 	PetState.commit()
+
+
+# 按真实经过时间恢复口粮份数。返回本次新整份的数量。
+# 满份时把计时锚点拨到当前时刻（不囤溢出时间）；首启（tick=0）只设锚点。
+func regen_feed_charges(initial: bool = false) -> int:
+	var now: float = float(Time.get_unix_time_from_system())
+	var tick: float = PetState.feed_tick_unix
+	if tick <= 0.0:
+		PetState.feed_tick_unix = now
+		return 0
+	var elapsed: float = maxf(0.0, now - tick)
+	if initial:
+		PetState.feed_charges = clampf(PetState.feed_charges, 0.0, MAX_FEED_CHARGES)
+	if PetState.feed_charges >= MAX_FEED_CHARGES:
+		PetState.feed_tick_unix = now
+		return 0
+	var before: int = int(PetState.feed_charges)
+	# 小数份数本身带着恢复进度，所以锚点直接推进到当前时刻即可
+	PetState.feed_charges = minf(MAX_FEED_CHARGES, PetState.feed_charges + elapsed / FEED_REGEN_SEC)
+	PetState.feed_tick_unix = now
+	return int(PetState.feed_charges) - before
+
+
+func feed_charges_left() -> int:
+	return int(PetState.feed_charges)
+
+
+# 下一份口粮还要多少秒（已满返回 0）
+func feed_seconds_to_next() -> int:
+	if PetState.feed_charges >= MAX_FEED_CHARGES:
+		return 0
+	var frac: float = PetState.feed_charges - floor(PetState.feed_charges)
+	return int(ceil((1.0 - frac) * FEED_REGEN_SEC))
 
 
 var last_interaction_msec := 0   # 最近一次交互时间，供调度器判断是否被冷落
 
 # 一次交互 → 一次确定性数值变化 + 记忆 + 日志
 # 维度分工：摸头→亲昵/温顺，喂食→亲昵，安抚→温顺/勇敢，聊天→好奇，玩耍→活泼/勇敢，冷落→活泼/亲昵下降
-func apply_interaction(kind: String) -> void:
+# 返回 false 表示这次交互因资源不足没有生效（目前只有口粮耗尽的喂食）。
+func apply_interaction(kind: String) -> bool:
+	if kind == "feed":
+		regen_feed_charges()
+		if feed_charges_left() <= 0:
+			return false
 	var memory := ""
 	var log := ""
 	match kind:
@@ -72,13 +116,15 @@ func apply_interaction(kind: String) -> void:
 			memory = "主人摸了摸我的头，好舒服。"
 			log = "被摸头 · 亲昵+1 温顺+0.4 心情+6"
 		"feed":
-			PetState.set_hunger(100.0)
-			PetState.add_energy(10.0)
+			# 进来前已 regen：满份时锚点刚被拨到当前时刻，消耗后恢复即开始计时
+			PetState.feed_charges -= 1.0
+			PetState.add_hunger(FEED_HUNGER_GAIN)
+			PetState.add_energy(5.0)
 			PetState.add_trust(3.0)
 			PetState.add_personality("affection", 0.5)
 			PetState.add_mood(4.0)
 			memory = "主人给我喂了好吃的，肚子饱饱的。"
-			log = "被喂食 · 信任+3 亲昵+0.5 心情+4 精力+10"
+			log = "被喂食 · 饱食+%d 信任+3 亲昵+0.5 心情+4 精力+5（剩余口粮%d份）" % [int(FEED_HUNGER_GAIN), feed_charges_left()]
 		"comfort":
 			PetState.add_mood(8.0)
 			PetState.add_trust(1.0)
@@ -109,7 +155,7 @@ func apply_interaction(kind: String) -> void:
 			memory = "主人好久没理我了……"
 			log = "被冷落 · 亲昵-0.5 活泼-0.5 心情-4"
 		_:
-			return
+			return false
 	_sleeping = false   # 被主人互动 = 醒过来
 	last_interaction_msec = Time.get_ticks_msec()
 	PetState.add_memory(memory)
@@ -117,6 +163,7 @@ func apply_interaction(kind: String) -> void:
 	check_trait_unlocks()
 	PetState.commit()
 	interaction_applied.emit(kind)
+	return true
 
 
 # ---- 聊天情感 → 性格 ----
@@ -260,6 +307,285 @@ func use_item(item_id: String) -> Dictionary:
 	check_trait_unlocks()
 	PetState.commit()
 	return {"ok": true, "name": item_name, "speech": str(def.get("speech", "")), "reaction": str(def.get("reaction", "positive"))}
+
+
+# ---- 探索世界：进入门槛 + 探险结算（全部本地确定性，LLM 不参与）----
+const EXPLORE_COST := 16.0
+const EXPLORE_MIN_ENERGY := 15.0
+
+
+# 出门：精力不足被拒绝；否则扣精力、唤醒、刷新交互时间（探索中不算冷落）
+func begin_exploration() -> bool:
+	if PetState.energy < EXPLORE_MIN_ENERGY:
+		return false
+	PetState.add_energy(-EXPLORE_COST)
+	_sleeping = false
+	last_interaction_msec = Time.get_ticks_msec()
+	PetState.add_log("外出探索 · 精力-%d" % int(EXPLORE_COST))
+	PetState.commit()
+	return true
+
+
+# 探险归来结算。r: {depth, kills, digs, items:{id:n}, fainted, hp_left}
+# 返回 {line, speech, reaction} 供主界面播报与表演
+func settle_expedition(r: Dictionary) -> Dictionary:
+	var items: Dictionary = r.get("items", {})
+	var kills: int = int(r.get("kills", 0))
+	var digs: int = int(r.get("digs", 0))
+	var fainted: bool = bool(r.get("fainted", false))
+	var depth: int = int(r.get("depth", 1))
+
+	for id in items.keys():
+		PetState.add_item(str(id), int(items[id]))
+
+	# 心情：打怪/挖宝/深入层数，晕倒重罚；勇敢靠战斗、好奇靠挖掘成长
+	var mood_delta: float = clampf(4.0 + kills * 2.0 + digs * 1.0 + depth * 2.0, 0.0, 20.0)
+	if fainted:
+		mood_delta = maxf(mood_delta - 8.0, -8.0)
+	PetState.add_mood(mood_delta)
+	PetState.add_personality("brave", kills * 0.35 - (0.3 if fainted else 0.0))
+	PetState.add_personality("curious", digs * 0.25)
+
+	# 日志：层数 / 击杀 / 挖掘 / 具体道具
+	var item_parts: Array = []
+	for id in items.keys():
+		item_parts.append("【%s】×%d" % [PetEventDeck.ITEM_NAMES.get(str(id), str(id)), int(items[id])])
+	var log := "探索归来 · 深入%d层 打败怪物%d 挖宝%d" % [depth, kills, digs]
+	if not item_parts.is_empty():
+		log += " 带回" + "、".join(item_parts)
+	log += " 心情%+.0f 勇敢%+.1f 好奇%+.1f" % [mood_delta, kills * 0.35 - (0.3 if fainted else 0.0), digs * 0.25]
+	if fainted:
+		log += "（体力不支逃回）"
+	PetState.add_log(log)
+
+	var memory := "我去数据废墟探险，下到第%d层，打败了%d只怪物、挖出了%d件宝贝。" % [depth, kills, digs]
+	if fainted:
+		memory = "我去数据废墟探险时被怪物打疼了，吓得一路跑回了家，但下次还要去！"
+	PetState.add_memory(memory)
+	PetState.commit()
+
+	# 罐头台词 + 表演（数值与台词分离的老规矩）
+	var speech := ""
+	var reaction := "positive"
+	if fainted:
+		speech = "呜……数据废墟深处有只好大的故障兽！我、我先溜回家了，宝藏都还在呢！"
+		reaction = "negative"
+	elif not item_parts.is_empty():
+		speech = "主人你看！我从数据废墟带回来%s，快夸我快夸我！" % "、".join(item_parts)
+		reaction = "dance"
+	elif kills > 0:
+		speech = "哈哈，那些数据史莱姆完全不是我的对手！下次要下到更深的地方！"
+		reaction = "run"
+	else:
+		speech = "我在数据废墟转了一圈，安安全全地回来啦。"
+	return {"line": log, "speech": speech, "reaction": reaction}
+
+
+# ---------- 霓虹跑酷（横版平台跳跃） ----------
+
+const ADVENTURE_COST := 16.0
+const ADVENTURE_MIN_ENERGY := 15.0
+
+
+# 出门闯关：精力不足被拒绝；否则扣精力、唤醒、刷新交互时间
+func begin_adventure() -> bool:
+	if PetState.energy < ADVENTURE_MIN_ENERGY:
+		return false
+	PetState.add_energy(-ADVENTURE_COST)
+	_sleeping = false
+	last_interaction_msec = Time.get_ticks_msec()
+	PetState.add_log("出门闯关 · 精力-%d" % int(ADVENTURE_COST))
+	PetState.commit()
+	return true
+
+
+# 跑酷归来结算。r: {coins, kills, items:{id:n}, deaths, level, cleared, fainted, hp_left}
+# 返回 {line, speech, reaction} 供主界面播报与表演
+func settle_platformer(r: Dictionary) -> Dictionary:
+	var items: Dictionary = r.get("items", {})
+	var coins: int = int(r.get("coins", 0))
+	var kills: int = int(r.get("kills", 0))
+	var deaths: int = int(r.get("deaths", 0))
+	var level: int = int(r.get("level", 1))
+	var cleared: bool = bool(r.get("cleared", false))
+	var fainted: bool = bool(r.get("fainted", false))
+
+	for id in items.keys():
+		PetState.add_item(str(id), int(items[id]))
+
+	# 心情：金币/踩怪/通关给正反馈，摔落掉血扣分；活泼靠通关成长、勇敢靠踩怪、好奇靠搜集
+	var mood_delta: float = clampf(4.0 + coins * 0.8 + kills * 2.0 + (10.0 if cleared else level * 2.0) - deaths * 3.0, -8.0, 22.0)
+	if fainted:
+		mood_delta = minf(mood_delta, -2.0)
+	PetState.add_mood(mood_delta)
+	var lively_gain: float = ((0.8 if cleared else level * 0.2) - deaths * 0.15)
+	var brave_gain: float = kills * 0.3 - (0.3 if fainted else 0.0)
+	var curious_gain: float = coins * 0.06
+	PetState.add_personality("lively", lively_gain)
+	PetState.add_personality("brave", brave_gain)
+	PetState.add_personality("curious", curious_gain)
+
+	var item_parts: Array = []
+	for id in items.keys():
+		item_parts.append("【%s】×%d" % [PetEventDeck.ITEM_NAMES.get(str(id), str(id)), int(items[id])])
+	var reached: String = "全部通关" if cleared else ("在第%d关倒下" % (level + 1) if fainted and level == 0 else "通过第%d关" % level)
+	var log := "霓虹跑酷 · %s 金币%d 踩飞怪物%d 摔落%d次" % [reached, coins, kills, deaths]
+	if not item_parts.is_empty():
+		log += " 宝箱带回" + "、".join(item_parts)
+	log += " 心情%+.0f 活泼%+.1f 勇敢%+.1f 好奇%+.1f" % [mood_delta, lively_gain, brave_gain, curious_gain]
+	if fainted:
+		log += "（生命耗尽被传送回家）"
+	PetState.add_log(log)
+
+	var memory := "我去霓虹天台跑酷，%s，捡了%d枚数据币、踩飞了%d只故障虫。" % [reached, coins, kills]
+	if fainted:
+		memory = "我在霓虹天台上跑酷时摔晕了，被传送回了家……但那些金币我可都攥着呢，下次一定通关！"
+	PetState.add_memory(memory)
+	PetState.commit()
+
+	var speech := ""
+	var reaction := "positive"
+	if fainted:
+		speech = "呜哇——天台之间的缝好宽！我、我被传送回家了，金币一个都没丢，下次一定跳过去！"
+		reaction = "negative"
+	elif cleared:
+		speech = "主人主人！霓虹天台三关我全跑通啦，风从耳边呼呼过，我现在是飞毛腿毛球！"
+		reaction = "dance"
+	elif not item_parts.is_empty():
+		speech = "嘿嘿，我在天台上找到宝箱，带回%s给你！" % "、".join(item_parts)
+		reaction = "dance"
+	elif kills > 0:
+		speech = "嘭！我从天上跳下来一脚一个故障虫，帅不帅帅不帅！"
+		reaction = "run"
+	else:
+		speech = "我在霓虹天台上跑了好一会儿，吹吹风真舒服～"
+	return {"line": log, "speech": speech, "reaction": reaction}
+
+
+# ---- 数据海垂钓（轻量收菜：低精力门槛、慢节奏、鱼图鉴）----
+const FISHING_COST := 10.0
+const FISHING_MIN_ENERGY := 10.0
+const FISH_BONUS_SEC := 5400.0    # 每离线 90 分钟攒 1 层鱼汛
+const FISH_BONUS_MAX := 2
+
+var fishing_bonus_streak := 0     # 本局剩余的鱼汛竿数
+
+
+# 出门钓鱼：精力门槛；按离线时间结算鱼汛层数（前 N 竿咬钩快、稀有率高）
+func begin_fishing() -> bool:
+	if PetState.energy < FISHING_MIN_ENERGY:
+		return false
+	var now: float = float(Time.get_unix_time_from_system())
+	var tick: float = PetState.fishing_tick_unix
+	if tick > 0.0:
+		var layers: int = int(maxf(0.0, now - tick) / FISH_BONUS_SEC)
+		fishing_bonus_streak = clampi(layers, 0, FISH_BONUS_MAX)
+	else:
+		fishing_bonus_streak = 0
+	PetState.fishing_tick_unix = now
+	PetState.add_energy(-FISHING_COST)
+	_sleeping = false
+	last_interaction_msec = Time.get_ticks_msec()
+	var log := "出门钓鱼 · 精力-%d" % int(FISHING_COST)
+	if fishing_bonus_streak > 0:
+		log += "（鱼汛×%d）" % fishing_bonus_streak
+	PetState.add_log(log)
+	PetState.commit()
+	return true
+
+
+# 钓鱼归来结算。r: {catches, misses, perfects, garbage, rare, items:{id:n}, fish:[id], new_dex:[id], fainted, dex_total}
+func settle_fishing(r: Dictionary) -> Dictionary:
+	fishing_bonus_streak = 0
+	var catches: int = int(r.get("catches", 0))
+	var misses: int = int(r.get("misses", 0))
+	var perfects: int = int(r.get("perfects", 0))
+	var garbage: int = int(r.get("garbage", 0))
+	var rare: int = int(r.get("rare", 0))
+	var items: Dictionary = r.get("items", {})
+	var fish: Array = r.get("fish", [])
+	var fainted: bool = bool(r.get("fainted", false))
+
+	for id in items.keys():
+		PetState.add_item(str(id), int(items[id]))
+
+	# 本次新收录去重后写入图鉴
+	var real_new: Array = []
+	for fid in r.get("new_dex", []):
+		var s: String = str(fid)
+		if not PetState.fish_dex.has(s):
+			PetState.fish_dex.append(s)
+			real_new.append(s)
+
+	var mood_delta: float = clampf(3.0 + catches * 2.0 + real_new.size() * 6.0 + rare * 4.0 - misses * 1.5 - garbage * 1.0, -6.0, 24.0)
+	if fainted:
+		mood_delta = minf(mood_delta, -2.0)
+	PetState.add_mood(mood_delta)
+	var curious_gain: float = catches * 0.12 + real_new.size() * 0.3
+	var gentle_gain: float = perfects * 0.08
+	var lively_gain: float = perfects * 0.05
+	PetState.add_personality("curious", curious_gain)
+	PetState.add_personality("gentle", gentle_gain)
+	PetState.add_personality("lively", lively_gain)
+
+	var item_parts: Array = []
+	for id in items.keys():
+		item_parts.append("【%s】×%d" % [PetEventDeck.ITEM_NAMES.get(str(id), str(id)), int(items[id])])
+	var fish_names: Array = []
+	for fid in fish:
+		fish_names.append(str(PetEventDeck.FISH_DEX[str(fid)]["name"]))
+	var log := "数据海垂钓 · 收获%d竿 脱钩%d次" % [catches, misses]
+	if not fish_names.is_empty():
+		log += " 钓到" + "、".join(fish_names.slice(0, 5))
+		if fish_names.size() > 5:
+			log += "等%d种" % fish_names.size()
+	if not real_new.is_empty():
+		log += " 图鉴新收录%d种（%d/%d）" % [real_new.size(), PetState.fish_dex.size(), PetEventDeck.FISH_TOTAL]
+	if not item_parts.is_empty():
+		log += " 带回" + "、".join(item_parts)
+	if garbage > 0:
+		log += " 垃圾×%d" % garbage
+	log += " 心情%+.0f 好奇%+.1f 温顺%+.1f 活泼%+.1f" % [mood_delta, curious_gain, gentle_gain, lively_gain]
+	if fainted:
+		log += "（耐心耗尽被传送回家）"
+	PetState.add_log(log)
+
+	var memory := ""
+	if real_new.is_empty() and catches > 0:
+		memory = "我在数据海边安安静静钓了 %d 竿鱼，海风和数据流一起晃，好舒服。" % catches
+	else:
+		var names: Array = []
+		for fid in real_new:
+			names.append(str(PetEventDeck.FISH_DEX[str(fid)]["name"]))
+		memory = "我在数据海第一次钓到了%s，图鉴又多了新收藏！" % "、".join(names)
+	if fainted:
+		memory = "我在数据海钓鱼时接连脱钩，耐心用光被传送回了家……好在钓上来的都没丢，下次一定沉住气。"
+	PetState.add_memory(memory)
+	PetState.commit()
+
+	var speech := ""
+	var reaction := "positive"
+	if fainted:
+		speech = "呜……连着让鱼跑了，我蹲在码头上瘪着嘴被送回家了。不过钓上来的我都好好抱着呢！"
+		reaction = "negative"
+	elif rare > 0:
+		var rare_names: Array = []
+		for fid in fish:
+			if int(PetEventDeck.FISH_DEX[str(fid)]["rarity"]) == 3:
+				rare_names.append(str(PetEventDeck.FISH_DEX[str(fid)]["name"]))
+		speech = "主人快看！！我钓到了传说中的%s，数据海都为它亮起来了！" % "、".join(rare_names)
+		reaction = "dance"
+	elif not real_new.is_empty():
+		var new_names: Array = []
+		for fid in real_new:
+			new_names.append(str(PetEventDeck.FISH_DEX[str(fid)]["name"]))
+		speech = "嘿嘿，图鉴上多了%s！我现在是数据海小博物学家～" % "、".join(new_names)
+		reaction = "dance"
+	elif catches == 0:
+		speech = "今天的鱼都好狡猾……不过吹了吹海风，我心情反而平静下来啦。"
+	else:
+		speech = "钓了%d竿，坐在码头晃脚丫的下午真舒服～" % catches
+	return {"line": log, "speech": speech, "reaction": reaction}
 
 
 # 离线兜底：本地关键词情感分析（LLM 不可用时保证聊天仍影响性格）
