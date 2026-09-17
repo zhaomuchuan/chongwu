@@ -51,6 +51,8 @@ const JUNK := [
 	["capacitor", "旧电容"],
 ]
 const RARITY_COLOR := {1: NEON_CYAN, 2: NEON_AMBER, 3: NEON_PINK}
+# 图鉴展示顺序：按稀有度三档
+const DEX_ORDER := ["plankton", "koi", "puffer", "jelly", "goldfish", "shark", "nullfish", "beacon"]
 
 @onready var PetState := get_node("/root/PetState") as PetStateStore
 @onready var PetBrain := get_node("/root/PetBrain") as PetBrainEngine
@@ -98,6 +100,8 @@ var _rod_tip := Vector2(286, 300)
 var _ripples: Array = []
 var _ambient: Array = []        # 背景游来游去的环境鱼（纯装饰）
 var _home_btn: Button
+var _dex_btn: Button
+var _dex_open := false
 
 const AMBIENT_COUNT := 10
 
@@ -117,6 +121,14 @@ func _ready() -> void:
 	_home_btn.position = Vector2(1130, 14)
 	_home_btn.pressed.connect(_on_home_pressed)
 	add_child(_home_btn)
+	_dex_btn = Button.new()
+	_dex_btn.text = "图鉴 · TAB"
+	_dex_btn.focus_mode = Control.FOCUS_NONE
+	_dex_btn.add_theme_font_size_override("font_size", 15)
+	_dex_btn.size = Vector2(132, 34)
+	_dex_btn.position = Vector2(990, 14)
+	_dex_btn.pressed.connect(_toggle_dex)
+	add_child(_dex_btn)
 	# 入场鱼汛层数由 PetBrain.begin_fishing 算好
 	if PetBrain.fishing_bonus_streak > 0:
 		_show_banner("鱼汛来了！前%d竿咬钩飞快" % PetBrain.fishing_bonus_streak)
@@ -132,16 +144,34 @@ func _layout() -> void:
 # ---------- 输入 ----------
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _done or event is not InputEventKey:
+	if _done:
 		return
-	var ke: InputEventKey = event
-	if ke.keycode != KEY_SPACE and ke.keycode != KEY_W and ke.keycode != KEY_UP \
-			and ke.physical_keycode != KEY_SPACE and ke.physical_keycode != KEY_W and ke.physical_keycode != KEY_UP:
-		return
-	if ke.pressed and not ke.echo:
-		_on_reel_button_down()
-	elif not ke.pressed:
-		_on_reel_button_up()
+	if event is InputEventKey:
+		var ke: InputEventKey = event
+		if ke.pressed and not ke.echo and (ke.keycode == KEY_TAB or ke.physical_keycode == KEY_TAB):
+			_toggle_dex()
+			accept_event()
+			return
+		if _dex_open:
+			return
+		if ke.keycode != KEY_SPACE and ke.keycode != KEY_W and ke.keycode != KEY_UP \
+				and ke.physical_keycode != KEY_SPACE and ke.physical_keycode != KEY_W and ke.physical_keycode != KEY_UP:
+			return
+		if ke.pressed and not ke.echo:
+			_on_reel_button_down()
+		elif not ke.pressed:
+			_on_reel_button_up()
+	elif event is InputEventMouseButton and _dex_open:
+		# 按钮自身的点击会被按钮消费，不会走到这里；点面板任意处关闭
+		if event.pressed:
+			_toggle_dex()
+			accept_event()
+
+
+func _toggle_dex() -> void:
+	_dex_open = not _dex_open
+	_holding = false
+	_dex_btn.text = "关闭图鉴" if _dex_open else "图鉴 · TAB"
 
 
 func _on_reel_button_down() -> void:
@@ -234,6 +264,9 @@ func _catch_fish() -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	if _dex_open:
+		queue_redraw()
+		return
 	match _phase:
 		"waiting":
 			_wait_t += delta
@@ -430,6 +463,8 @@ func _draw() -> void:
 	_draw_hud(font)
 	if _phase == "result":
 		_draw_result_card(font)
+	if _dex_open:
+		_draw_dex(font)
 
 
 func _draw_water(font: Font) -> void:
@@ -619,7 +654,7 @@ func _draw_hud(font: Font) -> void:
 			hint = ""   # 右侧条上有提示
 		"result":
 			hint = ""
-	if hint != "":
+	if hint != "" and not _dex_open:
 		var w: float = font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
 		var col: Color = DANGER if _phase == "bite" else TEXT_DIM
 		draw_string(font, Vector2(size.x * 0.5 - w * 0.5, size.y - 12.0), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, col)
@@ -627,6 +662,63 @@ func _draw_hud(font: Font) -> void:
 	if _t < _banner_until and _banner_text != "":
 		var bw2: float = font.get_string_size(_banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18).x
 		draw_string(font, Vector2(size.x * 0.5 - bw2 * 0.5, 120.0), _banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, NEON_PINK)
+
+
+func _draw_centered(font: Font, p: Vector2, txt: String, size: int, col: Color) -> void:
+	var w: float = font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	draw_string(font, p - Vector2(w * 0.5, 0), txt, HORIZONTAL_ALIGNMENT_LEFT, -1, size, col)
+
+
+func _draw_dex(font: Font) -> void:
+	# 压暗背景 + 居中面板
+	draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.0, 0.62), true)
+	var pw := 860.0
+	var ph := 470.0
+	var panel := Rect2(size.x * 0.5 - pw * 0.5, size.y * 0.5 - ph * 0.5, pw, ph)
+	draw_rect(panel, Color(0.03, 0.025, 0.07, 0.98), true)
+	draw_rect(panel, Color(NEON_CYAN, 0.75), false, 2.0)
+	var n_have: int = PetState.fish_dex.size()
+	draw_string(font, panel.position + Vector2(20, 32),
+		"数据鱼图鉴 // FISHDEX   %d/%d" % [n_have, PetEventDeck.FISH_TOTAL],
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 20, NEON_CYAN)
+	draw_string(font, panel.position + Vector2(20, 52),
+		"越稀有的鱼，光越亮 —— 完美刺鱼与鱼汛能提高遇见稀有鱼的机会",
+		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, TEXT_DIM)
+	var hint := "TAB / 点击任意处 关闭"
+	var hw: float = font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+	draw_string(font, panel.position + Vector2(pw - hw - 20, 30), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, NEON_PINK)
+	# 4×2 格子
+	var cell_w := 196.0
+	var cell_h := 178.0
+	var gap := 14.0
+	var ox: float = panel.position.x + (pw - cell_w * 4.0 - gap * 3.0) * 0.5
+	var oy: float = panel.position.y + 68.0
+	for i in DEX_ORDER.size():
+		var fid: String = DEX_ORDER[i]
+		var info: Dictionary = PetEventDeck.FISH_DEX[fid]
+		var got: bool = PetState.fish_dex.has(fid)
+		var rare: int = int(info["rarity"])
+		var accent: Color = RARITY_COLOR[rare] if got else Color(0.16, 0.19, 0.26)
+		var col_x: float = ox + (i % 4) * (cell_w + gap)
+		var col_y: float = oy + (i / 4) * (cell_h + gap)
+		var cell := Rect2(col_x, col_y, cell_w, cell_h)
+		draw_rect(cell, Color(accent, 0.1 if got else 0.25), true)
+		draw_rect(cell, Color(accent, 0.65 if got else 0.3), false, 1.5)
+		if got and _new_dex.has(fid):
+			draw_string(font, Vector2(col_x + 8, col_y + 20), "NEW", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, NEON_PINK)
+		var center := Vector2(col_x + cell_w * 0.5, col_y + 66.0)
+		if got:
+			_draw_fish_large(center, 0.95, accent, 0.95)
+		else:
+			# 未收录：暗色剪影，轻轻浮动看不出真身
+			_draw_fish_large(center, 0.95, accent, 0.85)
+		var nm: String = str(info["name"]) if got else "？？？"
+		var nm_col: Color = accent if got else Color(0.4, 0.45, 0.52)
+		_draw_centered(font, Vector2(center.x, col_y + 130), nm, 16, nm_col)
+		if got:
+			_draw_centered(font, Vector2(center.x, col_y + 152), PetEventDeck.FISH_RARITY_LABELS[rare], 12, Color(accent, 0.8))
+		else:
+			_draw_centered(font, Vector2(center.x, col_y + 152), "尚未发现", 12, Color(0.35, 0.4, 0.47))
 
 
 func _draw_heart(p: Vector2, r: float, col: Color) -> void:
