@@ -96,7 +96,10 @@ var _sea_y := 380.0
 var _bob_pos := Vector2(520, 380)
 var _rod_tip := Vector2(286, 300)
 var _ripples: Array = []
+var _ambient: Array = []        # 背景游来游去的环境鱼（纯装饰）
 var _home_btn: Button
+
+const AMBIENT_COUNT := 10
 
 
 func _ready() -> void:
@@ -105,6 +108,7 @@ func _ready() -> void:
 	get_viewport().gui_release_focus()
 	set_process(true)
 	_layout()
+	_spawn_ambient()
 	_home_btn = Button.new()
 	_home_btn.text = "撤离 · 回家"
 	_home_btn.focus_mode = Control.FOCUS_NONE
@@ -374,6 +378,32 @@ func _roll_catch() -> Dictionary:
 			}
 
 
+# ---------- 背景环境鱼（纯装饰，不影响玩法）----------
+
+func _spawn_ambient() -> void:
+	_ambient.clear()
+	# 三档稀有度配色 + 绿色，保证一进场就能看到好几种不同的鱼
+	var palette := [
+		NEON_CYAN, NEON_CYAN, NEON_CYAN, NEON_AMBER, NEON_AMBER,
+		NEON_PINK, NEON_PINK, NEON_GREEN, NEON_CYAN, NEON_AMBER,
+	]
+	palette.shuffle()
+	for i in AMBIENT_COUNT:
+		var dirv: float = 1.0 if randf() < 0.5 else -1.0
+		var base_col: Color = palette[i]
+		_ambient.append({
+			"off": randf_range(0.0, 1400.0),             # 相位偏移，让鱼分散在屏上
+			"speed": randf_range(14.0, 46.0),            # 横向游速（大小鱼不同速）
+			"dir": dirv,
+			"depth": randf_range(0.1, 0.92),             # 水下深度比例
+			"s": randf_range(0.5, 1.15),
+			"wob": randf_range(0.6, 1.6),
+			"phase": randf_range(0.0, TAU),
+			"col": base_col,
+			"alpha": randf_range(0.16, 0.3),
+		})
+
+
 # ---------- 水面粒子 ----------
 
 func _tick_ripples(delta: float) -> void:
@@ -428,6 +458,19 @@ func _draw_water(font: Font) -> void:
 		var gx: float = size.x * (0.08 + i * 0.105)
 		var off: float = fmod(_t * 26.0 + i * 53.0, 120.0)
 		draw_line(Vector2(gx, _sea_y + 10.0 + off), Vector2(gx, _sea_y + 26.0 + off), Color(NEON_CYAN, 0.07), 1.0)
+	# 背景游鱼：从屏幕一侧游到另一侧再环绕回来
+	var span: float = size.x + 160.0
+	var water_h: float = size.y - _sea_y - 24.0
+	for af in _ambient:
+		var fx: float = fmod(float(af["off"]) + float(af["speed"]) * _t, span) - 80.0
+		var fy: float = _sea_y + 20.0 + float(af["depth"]) * water_h \
+			+ sin(_t * float(af["wob"]) + float(af["phase"])) * 7.0
+		var ac: Color = af["col"]
+		draw_set_transform(
+			Vector2(fx, fy), 0.0,
+			Vector2(float(af["dir"]) * float(af["s"]), float(af["s"])))
+		_draw_fish_shape(Vector2.ZERO, 1.0, Color(ac.r, ac.g, ac.b, float(af["alpha"])))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 func _draw_dock_and_pet() -> void:
