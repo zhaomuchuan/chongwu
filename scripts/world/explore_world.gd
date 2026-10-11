@@ -12,7 +12,11 @@ const TILE := 40
 const COLS := 30
 const ROWS := 20
 const MAX_HP := 7
-const ULT_RANGE := 1     # 大招范围：切比雪夫半径 1 → 以毛球为中心的 3×3
+# 大招范围：4×4（以面朝方向为前，见 _in_ult_area）
+const ULT_FWD := 2       # 身前 2 格
+const ULT_BACK := 1      # 身后 1 格
+const ULT_RIGHT := 2     # 右手边 2 格
+const ULT_LEFT := 1      # 左手边 1 格
 const ULT_FX_DUR := 0.6  # 冲击波动画时长
 
 const NEON_CYAN := Color(0.02, 0.85, 0.91)
@@ -364,7 +368,7 @@ func _grant_loot() -> void:
 	_banner("挖到【%s】！" % PetEventDeck.ITEM_NAMES.get(item_id, item_id), 1.4)
 
 
-# 大招「数据湮灭」：清掉以毛球为中心的 3×3 内所有怪物，每层一次。
+# 大招「数据湮灭」：清掉毛球身前 4×4 范围内的所有怪物，每层一次。
 # 不触发战利品（大招是清场手段，不算打死的）；击杀照常计入 kills 参与结算。
 func _use_ult() -> void:
 	if _done:
@@ -372,12 +376,9 @@ func _use_ult() -> void:
 	if not _ult_ready:
 		_banner("大招这一层已经用掉了", 1.2)
 		return
-	var px: int = _player_pos.x
-	var py: int = _player_pos.y
 	var hit: Array = []
 	for m in _monsters:
-		var mp: Vector2i = m["pos"]
-		if absi(mp.x - px) <= ULT_RANGE and absi(mp.y - py) <= ULT_RANGE:
+		if _in_ult_area(m["pos"]):
 			hit.append(m)
 	# 范围内没怪就不消耗，留给真正被围住的时候
 	if hit.is_empty():
@@ -392,6 +393,19 @@ func _use_ult() -> void:
 	PetBrain.last_interaction_msec = Time.get_ticks_msec()
 	_banner("数据湮灭！清理 %d 只怪物" % hit.size(), 1.6)
 	_refresh_ult_ui()
+
+
+# 大招范围：以毛球所在格为基准的 4×4。
+# 4×4 是偶数格，无法以自己为中心完全对称，因此多出的一格放在面朝方向：
+# 身前 2 格 / 身后 1 格，侧向「右手边 2 格 / 左手边 1 格」。
+func _in_ult_area(p: Vector2i) -> bool:
+	var d: Vector2i = p - _player_pos
+	var fx: int = signi(_facing.x)
+	var fy: int = signi(_facing.y)
+	# 转到「面朝 = 前方」的局部坐标
+	var fwd: int = d.x * fx + d.y * fy
+	var side: int = d.x * -fy + d.y * fx
+	return fwd >= -ULT_BACK and fwd <= ULT_FWD and side >= -ULT_LEFT and side <= ULT_RIGHT
 
 
 func _refresh_ult_ui() -> void:
@@ -706,6 +720,25 @@ func _draw_monster_virus(c: Vector2, pulse: float, col: Color) -> void:
 		eye + Vector2(0, 2.6), eye + Vector2(-1.2, 0)]), Color(0.05, 0.05, 0.1))
 
 
+# 4×4 作用范围的四个角（世界像素坐标）：局部 fwd ∈ [-ULT_BACK, ULT_FWD+1]、side ∈ [-ULT_LEFT, ULT_RIGHT+1]
+func _ult_area_quad() -> PackedVector2Array:
+	var fx: int = signi(_facing.x)
+	var fy: int = signi(_facing.y)
+	var fwd_v := Vector2(fx, fy)          # 前方单位向量（格）
+	var side_v := Vector2(-fy, fx)        # 右手边单位向量（格）
+	var origin := Vector2(_player_pos) * TILE
+	var f0: float = float(-ULT_BACK)
+	var f1: float = float(ULT_FWD + 1)
+	var s0: float = float(-ULT_LEFT)
+	var s1: float = float(ULT_RIGHT + 1)
+	return PackedVector2Array([
+		origin + (fwd_v * f0 + side_v * s0) * TILE,
+		origin + (fwd_v * f1 + side_v * s0) * TILE,
+		origin + (fwd_v * f1 + side_v * s1) * TILE,
+		origin + (fwd_v * f0 + side_v * s1) * TILE,
+	])
+
+
 # 大招冲击波：从毛球向外扩散的双层霓虹环 + 放射状故障短线
 func _draw_ult_fx() -> void:
 	if _ult_fx < 0.0:
@@ -713,6 +746,11 @@ func _draw_ult_fx() -> void:
 	var k: float = clampf(_ult_fx / ULT_FX_DUR, 0.0, 1.0)
 	var fade: float = 1.0 - k
 	var c := (Vector2(_player_pos) + Vector2(0.5, 0.5)) * TILE
+	# 实际作用范围：随面朝方向旋转的 4×4 方框（让玩家看清打到了哪）
+	var quad: PackedVector2Array = _ult_area_quad()
+	if quad.size() == 4:
+		draw_colored_polygon(quad, Color(NEON_AMBER, 0.14 * fade))
+		draw_polyline(quad + PackedVector2Array([quad[0]]), Color(NEON_AMBER, 0.85 * fade), 2.0, true)
 	# 双层扩散环（外圈琥珀、内圈青）
 	var r_out: float = lerpf(6.0, TILE * 2.4, k)
 	draw_arc(c, r_out, 0.0, TAU, 40, Color(NEON_AMBER, 0.85 * fade), 3.0, true)
@@ -783,6 +821,6 @@ func _draw_hud(font: Font) -> void:
 		draw_string(font, Vector2(bx + 16, 92), _banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 
 	# 底部操作提示
-	var hint := "WASD/方向键 移动（撞向怪物=攻击） · 空格 挖面前的矿藏 · E 大招（3×3 清场，每层一次） · 鼠标点击自动寻路 · 走到传送门下潜更深层"
+	var hint := "WASD/方向键 移动（撞向怪物=攻击） · 空格 挖面前的矿藏 · E 大招（身前 4×4 清场，每层一次） · 鼠标点击自动寻路 · 走到传送门下潜更深层"
 	draw_rect(Rect2(0, size.y - 30, size.x, 30), Color(0.035, 0.028, 0.075, 0.92), true)
 	draw_string(font, Vector2(14, size.y - 10), hint, HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 12, TEXT_DIM)
