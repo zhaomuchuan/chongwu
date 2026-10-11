@@ -12,11 +12,8 @@ const TILE := 40
 const COLS := 30
 const ROWS := 20
 const MAX_HP := 7
-# 大招范围：4×4（以面朝方向为前，见 _in_ult_area）
-const ULT_FWD := 2       # 身前 2 格
-const ULT_BACK := 1      # 身后 1 格
-const ULT_RIGHT := 2     # 右手边 2 格
-const ULT_LEFT := 1      # 左手边 1 格
+# 大招范围：以毛球为中心的 5×5（切比雪夫半径 2，完全对称）
+const ULT_RADIUS := 2
 const ULT_FX_DUR := 0.6  # 冲击波动画时长
 
 const NEON_CYAN := Color(0.02, 0.85, 0.91)
@@ -368,7 +365,7 @@ func _grant_loot() -> void:
 	_banner("挖到【%s】！" % PetEventDeck.ITEM_NAMES.get(item_id, item_id), 1.4)
 
 
-# 大招「数据湮灭」：清掉毛球身前 4×4 范围内的所有怪物，每层一次。
+# 大招「数据湮灭」：清掉毛球周围 5×5 范围内的所有怪物，每层一次。
 # 不触发战利品（大招是清场手段，不算打死的）；击杀照常计入 kills 参与结算。
 func _use_ult() -> void:
 	if _done:
@@ -395,17 +392,10 @@ func _use_ult() -> void:
 	_refresh_ult_ui()
 
 
-# 大招范围：以毛球所在格为基准的 4×4。
-# 4×4 是偶数格，无法以自己为中心完全对称，因此多出的一格放在面朝方向：
-# 身前 2 格 / 身后 1 格，侧向「右手边 2 格 / 左手边 1 格」。
+# 大招范围：以毛球为中心、半径 2 的方形区（5×5，上下左右完全对称）
 func _in_ult_area(p: Vector2i) -> bool:
 	var d: Vector2i = p - _player_pos
-	var fx: int = signi(_facing.x)
-	var fy: int = signi(_facing.y)
-	# 转到「面朝 = 前方」的局部坐标
-	var fwd: int = d.x * fx + d.y * fy
-	var side: int = d.x * -fy + d.y * fx
-	return fwd >= -ULT_BACK and fwd <= ULT_FWD and side >= -ULT_LEFT and side <= ULT_RIGHT
+	return absi(d.x) <= ULT_RADIUS and absi(d.y) <= ULT_RADIUS
 
 
 func _refresh_ult_ui() -> void:
@@ -720,22 +710,15 @@ func _draw_monster_virus(c: Vector2, pulse: float, col: Color) -> void:
 		eye + Vector2(0, 2.6), eye + Vector2(-1.2, 0)]), Color(0.05, 0.05, 0.1))
 
 
-# 4×4 作用范围的四个角（世界像素坐标）：局部 fwd ∈ [-ULT_BACK, ULT_FWD+1]、side ∈ [-ULT_LEFT, ULT_RIGHT+1]
+# 5×5 作用范围的四个角（世界像素坐标）
 func _ult_area_quad() -> PackedVector2Array:
-	var fx: int = signi(_facing.x)
-	var fy: int = signi(_facing.y)
-	var fwd_v := Vector2(fx, fy)          # 前方单位向量（格）
-	var side_v := Vector2(-fy, fx)        # 右手边单位向量（格）
-	var origin := Vector2(_player_pos) * TILE
-	var f0: float = float(-ULT_BACK)
-	var f1: float = float(ULT_FWD + 1)
-	var s0: float = float(-ULT_LEFT)
-	var s1: float = float(ULT_RIGHT + 1)
+	var side_px: float = float(ULT_RADIUS * 2 + 1) * TILE
+	var origin := Vector2(_player_pos - Vector2i(ULT_RADIUS, ULT_RADIUS)) * TILE
 	return PackedVector2Array([
-		origin + (fwd_v * f0 + side_v * s0) * TILE,
-		origin + (fwd_v * f1 + side_v * s0) * TILE,
-		origin + (fwd_v * f1 + side_v * s1) * TILE,
-		origin + (fwd_v * f0 + side_v * s1) * TILE,
+		origin,
+		origin + Vector2(side_px, 0.0),
+		origin + Vector2(side_px, side_px),
+		origin + Vector2(0.0, side_px),
 	])
 
 
@@ -821,6 +804,6 @@ func _draw_hud(font: Font) -> void:
 		draw_string(font, Vector2(bx + 16, 92), _banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 
 	# 底部操作提示
-	var hint := "WASD/方向键 移动（撞向怪物=攻击） · 空格 挖面前的矿藏 · E 大招（身前 4×4 清场，每层一次） · 鼠标点击自动寻路 · 走到传送门下潜更深层"
+	var hint := "WASD/方向键 移动（撞向怪物=攻击） · 空格 挖面前的矿藏 · E 大招（周围 5×5 清场，每层一次） · 鼠标点击自动寻路 · 走到传送门下潜更深层"
 	draw_rect(Rect2(0, size.y - 30, size.x, 30), Color(0.035, 0.028, 0.075, 0.92), true)
 	draw_string(font, Vector2(14, size.y - 10), hint, HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 12, TEXT_DIM)
