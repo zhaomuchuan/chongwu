@@ -11,7 +11,7 @@ signal finished(summary: Dictionary)
 const TILE := 40
 const COLS := 30
 const ROWS := 20
-const MAX_HP := 3
+const MAX_HP := 7
 
 const NEON_CYAN := Color(0.02, 0.85, 0.91)
 const NEON_PINK := Color(1.0, 0.165, 0.43)
@@ -668,19 +668,20 @@ func _draw_hud(font: Font) -> void:
 	draw_rect(Rect2(0, 0, size.x, 56), Color(NEON_CYAN, 0.4), false, 1.0)
 	draw_string(font, Vector2(14, 24), "数据废墟 // GRID-%02d（第 %d 层）" % [_depth, _depth],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 17, NEON_PINK)
-	# 生命
+	# 生命（心数随 MAX_HP；颜色按血量是否过半）
 	var hearts := ""
 	for i in MAX_HP:
 		hearts += "♥ " if i < _hp else "♡ "
 	draw_string(font, Vector2(14, 46), hearts, HORIZONTAL_ALIGNMENT_LEFT, -1, 16,
-		NEON_GREEN if _hp >= 2 else DANGER)
-	# 本次战利品
+		NEON_GREEN if _hp * 2 > MAX_HP else DANGER)
+	# 本次战利品（紧跟在心的后面，避免血量格数变多时挤在一起）
+	var hearts_w: float = font.get_string_size(hearts, HORIZONTAL_ALIGNMENT_LEFT, -1, 16).x
 	var loot_parts: Array = []
 	for id in PetEventDeck.ITEM_NAMES.keys():
 		if _items.has(id):
 			loot_parts.append("%s×%d" % [PetEventDeck.ITEM_NAMES[id], int(_items[id])])
 	var loot := "战利品：%s" % ("、".join(loot_parts) if not loot_parts.is_empty() else "（还没有收获）")
-	draw_string(font, Vector2(120, 46), loot, HORIZONTAL_ALIGNMENT_LEFT, 620, 13, NEON_AMBER)
+	draw_string(font, Vector2(14.0 + hearts_w + 12.0, 46), loot, HORIZONTAL_ALIGNMENT_LEFT, 620, 13, NEON_AMBER)
 	# 击杀统计（放在标题右侧，标题约 340px 宽）
 	draw_string(font, Vector2(470, 24), "击败 %d   挖宝 %d" % [_kills, _digs_count],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, TEXT_DIM)
