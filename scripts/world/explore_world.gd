@@ -12,6 +12,8 @@ const TILE := 40
 const COLS := 30
 const ROWS := 20
 const MAX_HP := 7
+const ULT_RANGE := 1     # 大招范围：切比雪夫半径 1 → 以毛球为中心的 3×3
+const ULT_FX_DUR := 0.6  # 冲击波动画时长
 
 const NEON_CYAN := Color(0.02, 0.85, 0.91)
 const NEON_PINK := Color(1.0, 0.165, 0.43)
@@ -48,6 +50,10 @@ var _done := false
 var _t := 0.0
 var _shake := 0.0
 
+var _ult_ready := true    # 大招：每层可用一次，_descend() 时刷新
+var _ult_fx := -1.0       # 冲击波动画计时（秒），<0 表示不在播放
+var _ult_btn: Button
+
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -63,6 +69,15 @@ func _ready() -> void:
 	btn.position = Vector2(1130, 14)
 	btn.pressed.connect(_on_home_pressed)
 	add_child(btn)
+	# 大招按钮（键盘 E 同效，鼠标玩家也能点）
+	_ult_btn = Button.new()
+	_ult_btn.focus_mode = Control.FOCUS_NONE
+	_ult_btn.add_theme_font_size_override("font_size", 15)
+	_ult_btn.size = Vector2(160, 34)
+	_ult_btn.position = Vector2(962, 14)
+	_ult_btn.pressed.connect(_use_ult)
+	add_child(_ult_btn)
+	_refresh_ult_ui()
 	set_process(true)
 
 
@@ -220,6 +235,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_SPACE:
 			_dig_facing()
 			return
+		KEY_E:
+			_use_ult()
+			return
 	if d != Vector2i.ZERO:
 		_path.clear()
 		_has_pending_attack = false
@@ -346,6 +364,43 @@ func _grant_loot() -> void:
 	_banner("挖到【%s】！" % PetEventDeck.ITEM_NAMES.get(item_id, item_id), 1.4)
 
 
+# 大招「数据湮灭」：清掉以毛球为中心的 3×3 内所有怪物，每层一次。
+# 不触发战利品（大招是清场手段，不算打死的）；击杀照常计入 kills 参与结算。
+func _use_ult() -> void:
+	if _done:
+		return
+	if not _ult_ready:
+		_banner("大招这一层已经用掉了", 1.2)
+		return
+	var px: int = _player_pos.x
+	var py: int = _player_pos.y
+	var hit: Array = []
+	for m in _monsters:
+		var mp: Vector2i = m["pos"]
+		if absi(mp.x - px) <= ULT_RANGE and absi(mp.y - py) <= ULT_RANGE:
+			hit.append(m)
+	# 范围内没怪就不消耗，留给真正被围住的时候
+	if hit.is_empty():
+		_banner("附近没有怪物，大招先留着", 1.2)
+		return
+	for m in hit:
+		_monsters.erase(m)
+	_kills += hit.size()
+	_ult_ready = false
+	_ult_fx = 0.0
+	_shake = 0.28
+	PetBrain.last_interaction_msec = Time.get_ticks_msec()
+	_banner("数据湮灭！清理 %d 只怪物" % hit.size(), 1.6)
+	_refresh_ult_ui()
+
+
+func _refresh_ult_ui() -> void:
+	if _ult_btn == null:
+		return
+	_ult_btn.text = "大招 · 湮灭（E）" if _ult_ready else "大招 · 本层已用"
+	_ult_btn.disabled = not _ult_ready
+
+
 func _attack(mp: Dictionary) -> void:
 	PetBrain.last_interaction_msec = Time.get_ticks_msec()
 	var dmg: int = 2 if PetBrain.has_trait("brave") else 1
@@ -413,6 +468,8 @@ func _descend() -> void:
 	if _hp < MAX_HP:
 		_hp += 1
 	_path.clear()
+	_ult_ready = true     # 大招每层刷新
+	_refresh_ult_ui()
 	_gen_level()
 	_banner("深入第 %d 层 · 生命恢复 1" % _depth, 2.0)
 
@@ -445,6 +502,10 @@ func _banner(text: String, dur: float) -> void:
 func _process(delta: float) -> void:
 	_t += delta
 	_shake = maxf(0.0, _shake - delta)
+	if _ult_fx >= 0.0:
+		_ult_fx += delta
+		if _ult_fx > ULT_FX_DUR:
+			_ult_fx = -1.0
 	if not _path.is_empty() and not _done:
 		# 活泼特质：自动行走更快
 		var interval: float = lerpf(0.14, 0.085, PetBrain.trait_strength("lively"))
@@ -575,6 +636,7 @@ func _draw() -> void:
 
 	# 毛球（永远画在迷雾之上）
 	_draw_player()
+	_draw_ult_fx()
 
 	draw_set_transform(Vector2.ZERO)
 
@@ -644,6 +706,27 @@ func _draw_monster_virus(c: Vector2, pulse: float, col: Color) -> void:
 		eye + Vector2(0, 2.6), eye + Vector2(-1.2, 0)]), Color(0.05, 0.05, 0.1))
 
 
+# 大招冲击波：从毛球向外扩散的双层霓虹环 + 放射状故障短线
+func _draw_ult_fx() -> void:
+	if _ult_fx < 0.0:
+		return
+	var k: float = clampf(_ult_fx / ULT_FX_DUR, 0.0, 1.0)
+	var fade: float = 1.0 - k
+	var c := (Vector2(_player_pos) + Vector2(0.5, 0.5)) * TILE
+	# 双层扩散环（外圈琥珀、内圈青）
+	var r_out: float = lerpf(6.0, TILE * 2.4, k)
+	draw_arc(c, r_out, 0.0, TAU, 40, Color(NEON_AMBER, 0.85 * fade), 3.0, true)
+	draw_arc(c, r_out * 0.68, 0.0, TAU, 34, Color(NEON_CYAN, 0.7 * fade), 2.0, true)
+	# 放射故障短线：沿 8 个方向甩出
+	for i in 8:
+		var a: float = TAU * float(i) / 8.0
+		var dir := Vector2(cos(a), sin(a))
+		draw_line(c + dir * r_out * 0.75, c + dir * (r_out + 10.0), Color(NEON_AMBER, 0.5 * fade), 2.0, true)
+	# 中心一闪
+	if k < 0.35:
+		draw_circle(c, 26.0 * (1.0 - k / 0.35), Color(1.0, 1.0, 1.0, 0.35 * (1.0 - k / 0.35)))
+
+
 func _draw_player() -> void:
 	var c := (Vector2(_player_pos) + Vector2(0.5, 0.55)) * TILE
 	# 耳朵（俯视角露出两只长耳）
@@ -685,6 +768,11 @@ func _draw_hud(font: Font) -> void:
 	# 击杀统计（放在标题右侧，标题约 340px 宽）
 	draw_string(font, Vector2(470, 24), "击败 %d   挖宝 %d" % [_kills, _digs_count],
 		HORIZONTAL_ALIGNMENT_LEFT, -1, 13, TEXT_DIM)
+	# 大招状态
+	if _ult_ready:
+		draw_string(font, Vector2(640, 24), "大招 ◆ 可用（E）", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, NEON_AMBER)
+	else:
+		draw_string(font, Vector2(640, 24), "大招 ◇ 本层已用", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color(0.4, 0.45, 0.52))
 
 	# 居中飘字
 	if _t < _banner_until and _banner_text != "":
@@ -695,6 +783,6 @@ func _draw_hud(font: Font) -> void:
 		draw_string(font, Vector2(bx + 16, 92), _banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color.WHITE)
 
 	# 底部操作提示
-	var hint := "WASD/方向键 移动（撞向怪物=攻击） · 空格 挖面前的矿藏 · 鼠标点击自动寻路 · 走到传送门下潜更深层"
+	var hint := "WASD/方向键 移动（撞向怪物=攻击） · 空格 挖面前的矿藏 · E 大招（3×3 清场，每层一次） · 鼠标点击自动寻路 · 走到传送门下潜更深层"
 	draw_rect(Rect2(0, size.y - 30, size.x, 30), Color(0.035, 0.028, 0.075, 0.92), true)
 	draw_string(font, Vector2(14, size.y - 10), hint, HORIZONTAL_ALIGNMENT_LEFT, size.x - 28, 12, TEXT_DIM)
