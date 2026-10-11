@@ -135,7 +135,9 @@ func _gen_level() -> void:
 		used[_key(p)] = true
 		var elite: bool = randf() < clampf(0.12 + _depth * 0.08, 0.0, 0.6)
 		var hp: int = 3 if elite else 2
-		_monsters.append({"pos": p, "hp": hp, "max_hp": hp, "elite": elite})
+		# 两种皮肤（数据史莱姆 / 病毒孢体）：仅外观与名字不同，数值与 AI 完全共用
+		var kind := "virus" if randf() < 0.5 else "slime"
+		_monsters.append({"pos": p, "hp": hp, "max_hp": hp, "elite": elite, "kind": kind})
 		n -= 1
 	_player_pos = Vector2i(1, 1)
 	_facing = Vector2i(0, 1)
@@ -353,7 +355,7 @@ func _attack(mp: Dictionary) -> void:
 		var elite: bool = mp["elite"]
 		_monsters.erase(mp)
 		_kills += 1
-		_banner("击败%s！" % ("故障兽" if elite else "数据史莱姆"), 1.2)
+		_banner("击败%s！" % ("故障兽" if elite else ("病毒孢体" if str(mp.get("kind", "slime")) == "virus" else "数据史莱姆")), 1.2)
 		# 35% 战斗掉落（精英必掉）
 		if elite or randf() < 0.35:
 			_grant_loot()
@@ -582,24 +584,64 @@ func _draw() -> void:
 
 func _draw_monster(m: Dictionary, pulse: float) -> void:
 	var c := (Vector2(m["pos"]) + Vector2(0.5, 0.55)) * TILE
-	var col: Color = Color(0.85, 0.12, 0.55) if m["elite"] else Color(0.75, 0.18, 0.7)
+	var kind := str(m.get("kind", "slime"))
+	var elite: bool = m["elite"]
+	# 每种皮肤各有「普通 / 精英」配色，精英更暗更烫
+	var col: Color
+	if kind == "virus":
+		col = Color(0.10, 0.95, 0.95) if elite else Color(0.25, 0.95, 0.45)
+	else:
+		col = Color(0.85, 0.12, 0.55) if elite else Color(0.75, 0.18, 0.7)
 	var r := 12.0
-	# 史莱姆半圆身体
+	# 脉动光晕（两种皮肤共用）
 	draw_circle(c, r + pulse, Color(col, 0.35))
-	draw_circle(c, r, col)
-	draw_arc(c, r, PI, TAU, 16, Color(1, 1, 1, 0.35), 1.5, true)
-	# 眼睛
-	draw_circle(c + Vector2(-4, -2), 2.2, Color.WHITE)
-	draw_circle(c + Vector2(4, -2), 2.2, Color.WHITE)
-	draw_circle(c + Vector2(-4, -2), 1.0, Color.BLACK)
-	draw_circle(c + Vector2(4, -2), 1.0, Color.BLACK)
-	if m["elite"]:
+	if kind == "virus":
+		_draw_monster_virus(c, pulse, col)
+	else:
+		_draw_monster_slime(c, pulse, col)
+	if elite:
 		draw_string(ThemeDB.fallback_font, c + Vector2(-6, -18), "!", HORIZONTAL_ALIGNMENT_LEFT, -1, 13, DANGER)
-	# HP 小条
+	# HP 小条（两种皮肤共用）
 	for i in int(m["max_hp"]):
 		var filled: bool = i < int(m["hp"])
 		var pip_col: Color = DANGER if filled else Color(0.3, 0.25, 0.25, 0.5)
 		draw_rect(Rect2(c + Vector2(-9 + i * 7, -22), Vector2(5, 3)), pip_col, true)
+
+
+# 皮肤一：数据史莱姆——半圆团 + 双眼
+func _draw_monster_slime(c: Vector2, _pulse: float, col: Color) -> void:
+	var r := 12.0
+	draw_circle(c, r, col)
+	draw_arc(c, r, PI, TAU, 16, Color(1, 1, 1, 0.35), 1.5, true)
+	draw_circle(c + Vector2(-4, -2), 2.2, Color.WHITE)
+	draw_circle(c + Vector2(4, -2), 2.2, Color.WHITE)
+	draw_circle(c + Vector2(-4, -2), 1.0, Color.BLACK)
+	draw_circle(c + Vector2(4, -2), 1.0, Color.BLACK)
+
+
+# 皮肤二：病毒孢体——放射尖刺 + 亮核 + 单只竖瞳
+func _draw_monster_virus(c: Vector2, pulse: float, col: Color) -> void:
+	var r := 10.5
+	# 尖刺（随时间缓慢旋转，像在游动）
+	var spin: float = _t * 0.6
+	for i in 8:
+		var a: float = spin + TAU * float(i) / 8.0
+		var dir := Vector2(cos(a), sin(a))
+		var tip := c + dir * (r + 5.0 + pulse * 2.0)
+		var side := Vector2(-dir.y, dir.x) * 2.6
+		draw_colored_polygon(PackedVector2Array([
+			c + dir * (r - 2.0) + side, tip, c + dir * (r - 2.0) - side]), col)
+	# 球身（外圈亮、内芯浅，做出孢子质感）
+	draw_circle(c, r, col)
+	draw_circle(c, r, Color(1, 1, 1, 0.22))
+	draw_arc(c, r, 0, TAU, 20, Color(1, 1, 1, 0.3), 1.2, true)
+	draw_circle(c, 4.0 + pulse * 1.2, Color(0.92, 1.0, 1.0, 0.8))
+	# 单只竖瞳眼（竖长菱形，和史莱姆的圆双眼明显不同）
+	var eye := c + Vector2(0.0, -3.0)
+	draw_circle(eye, 3.0, Color.WHITE)
+	draw_colored_polygon(PackedVector2Array([
+		eye + Vector2(0, -2.6), eye + Vector2(1.2, 0),
+		eye + Vector2(0, 2.6), eye + Vector2(-1.2, 0)]), Color(0.05, 0.05, 0.1))
 
 
 func _draw_player() -> void:

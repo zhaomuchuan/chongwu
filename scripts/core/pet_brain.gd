@@ -373,7 +373,7 @@ func settle_expedition(r: Dictionary) -> Dictionary:
 		speech = "主人你看！我从数据废墟带回来%s，快夸我快夸我！" % "、".join(item_parts)
 		reaction = "dance"
 	elif kills > 0:
-		speech = "哈哈，那些数据史莱姆完全不是我的对手！下次要下到更深的地方！"
+		speech = "哈哈，那些废墟里的怪物完全不是我的对手！下次要下到更深的地方！"
 		reaction = "run"
 	else:
 		speech = "我在数据废墟转了一圈，安安全全地回来啦。"
@@ -493,6 +493,16 @@ func begin_fishing() -> bool:
 	return true
 
 
+# 钓到鱼的瞬间收录图鉴（立即持久化，避免局内 HUD/图鉴面板看不到、闪退丢收录）。
+# 返回是否为首次收录；心情/性格加成仍统一留到 settle_fishing。
+func register_fish_catch(fid: String) -> bool:
+	if PetState.fish_dex.has(fid):
+		return false
+	PetState.fish_dex.append(fid)
+	PetState.commit()
+	return true
+
+
 # 钓鱼归来结算。r: {catches, misses, perfects, garbage, rare, items:{id:n}, fish:[id], new_dex:[id], fainted, dex_total}
 func settle_fishing(r: Dictionary) -> Dictionary:
 	fishing_bonus_streak = 0
@@ -508,13 +518,15 @@ func settle_fishing(r: Dictionary) -> Dictionary:
 	for id in items.keys():
 		PetState.add_item(str(id), int(items[id]))
 
-	# 本次新收录去重后写入图鉴
+	# 本次新收录名单（钓到瞬间已由 register_fish_catch 写入并落盘，
+	# 这里兜底再去重一次，real_new 直接用于心情/性格加成与日志）
 	var real_new: Array = []
 	for fid in r.get("new_dex", []):
 		var s: String = str(fid)
+		if not real_new.has(s):
+			real_new.append(s)
 		if not PetState.fish_dex.has(s):
 			PetState.fish_dex.append(s)
-			real_new.append(s)
 
 	var mood_delta: float = clampf(3.0 + catches * 2.0 + real_new.size() * 6.0 + rare * 4.0 - misses * 1.5 - garbage * 1.0, -6.0, 24.0)
 	if fainted:
