@@ -356,7 +356,10 @@ func _refresh_inventory() -> void:
 	for id in ids:
 		var count: int = int(PetState.inventory[id])
 		var b := Button.new()
-		b.text = "◆ %s ×%d" % [PetEventDeck.ITEM_NAMES.get(str(id), str(id)), count]
+		# 回精力的道具标一个 ⚡，方便一眼认出应急体力
+		var spark: String = "⚡" if PetBrain.item_gives_energy(str(id)) else "◆"
+		b.text = "%s %s ×%d" % [spark, PetEventDeck.ITEM_NAMES.get(str(id), str(id)), count]
+		b.tooltip_text = PetBrain.item_effect_summary(str(id))
 		b.focus_mode = Control.FOCUS_NONE
 		b.add_theme_font_size_override("font_size", 13)
 		_style_item_button(b)

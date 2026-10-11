@@ -238,7 +238,7 @@ const ITEM_USE := {
 	"feather": {
 		"speech": "羽毛飘起来啦！看我抓住它——嘿嘿，是不是跑得飞快！",
 		"reaction": "run",
-		"effects": {"mood": 6.0, "persona": {"lively": 0.8}},
+		"effects": {"mood": 6.0, "energy": 6.0, "persona": {"lively": 0.8}},
 	},
 	"stone": {
 		"speech": "凉凉滑滑的石子握在爪子里，心里一下就安静下来了。",
@@ -263,14 +263,43 @@ const ITEM_USE := {
 	"bell": {
 		"speech": "叮铃叮铃！主人你听，我走到哪里，声音就跟到哪里！",
 		"reaction": "dance",
-		"effects": {"mood": 7.0, "trust": 1.0, "persona": {"lively": 0.7}},
+		"effects": {"mood": 7.0, "trust": 1.0, "energy": 8.0, "persona": {"lively": 0.7}},
 	},
 	"key": {
 		"speech": "这把钥匙……我好像听到远处有一扇小门，轻轻响了一下！",
 		"reaction": "look",
-		"effects": {"mood": 10.0, "persona": {"curious": 1.5, "brave": 0.5}},
+		"effects": {"mood": 10.0, "energy": 15.0, "persona": {"curious": 1.5, "brave": 0.5}},
 	},
 }
+
+
+# 道具效果转成可读文本（日志与按钮 tooltip 共用同一套格式）
+func _effect_parts(fx: Dictionary) -> Array:
+	var parts: Array = []
+	if fx.has("mood"):
+		parts.append("心情%+.0f" % float(fx["mood"]))
+	if fx.has("trust"):
+		parts.append("信任%+.0f" % float(fx["trust"]))
+	if fx.has("energy"):
+		parts.append("精力%+.0f" % float(fx["energy"]))
+	var persona: Dictionary = fx.get("persona", {})
+	for dim in persona.keys():
+		parts.append("%s%+.1f" % [PetState.DIMENSION_LABELS.get(str(dim), str(dim)), float(persona[dim])])
+	return parts
+
+
+# 该道具是否回精力（主界面用它把按钮标成 ⚡）
+func item_gives_energy(item_id: String) -> bool:
+	return ITEM_USE.get(item_id, {}).get("effects", {}).has("energy")
+
+
+# 道具效果摘要，用于按钮 tooltip
+func item_effect_summary(item_id: String) -> String:
+	var def: Dictionary = ITEM_USE.get(item_id, {})
+	if def.is_empty():
+		return ""
+	var parts: Array = _effect_parts(def.get("effects", {}))
+	return "%s：%s" % [PetEventDeck.ITEM_NAMES.get(item_id, item_id), " ".join(parts)]
 
 
 # 使用一件道具：扣除 1 个、结算效果；返回 {ok, name, speech, reaction}
@@ -288,18 +317,14 @@ func use_item(item_id: String) -> Dictionary:
 		PetState.add_mood(float(fx["mood"]))
 	if fx.has("trust"):
 		PetState.add_trust(float(fx["trust"]))
+	if fx.has("energy"):
+		PetState.add_energy(float(fx["energy"]))
 	var persona: Dictionary = fx.get("persona", {})
 	for dim in persona.keys():
 		PetState.add_personality(str(dim), float(persona[dim]))
 	PetState.add_item(item_id, -1)
 
-	var parts: Array = []
-	if fx.has("mood"):
-		parts.append("心情%+.0f" % float(fx["mood"]))
-	if fx.has("trust"):
-		parts.append("信任%+.0f" % float(fx["trust"]))
-	for dim in persona.keys():
-		parts.append("%s%+.1f" % [PetState.DIMENSION_LABELS.get(str(dim), str(dim)), float(persona[dim])])
+	var parts: Array = _effect_parts(fx)
 	var item_name: String = PetEventDeck.ITEM_NAMES.get(item_id, item_id)
 	PetState.add_memory("主人把【%s】拿给我玩，我开心地用了好久。" % item_name)
 	PetState.add_log("使用道具【%s】 · %s" % [item_name, " ".join(parts)])
